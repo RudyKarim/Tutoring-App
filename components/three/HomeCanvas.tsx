@@ -33,17 +33,20 @@ function CameraRig({ rig }: { rig: Props["rig"] }) {
   useFrame((_, dt) => {
     const { progress, enter, pointer } = rig.current;
     const narrow = size.width / size.height < 0.8;
-    const baseZ = narrow ? 12.5 : 8.6;
+    const baseZ = narrow ? 14 : 8.6;
     const x = progress * SPACING;
+    // Frame the object right of the copy on desktop, above it on mobile.
+    const frameX = narrow ? 0 : -1.9 * (1 - enter);
+    const frameY = narrow ? -2.0 * (1 - enter) : 0;
     // Depth: pull back slightly mid-transition for a sense of travel.
     const travel = Math.sin((progress % 1) * Math.PI);
-    const tx = x + pointer.x * 0.35 * (1 - enter);
-    const ty = 0.55 + pointer.y * 0.25 * (1 - enter) - enter * 0.25;
+    const tx = x + frameX + pointer.x * 0.35 * (1 - enter);
+    const ty = 0.55 + frameY + pointer.y * 0.25 * (1 - enter) - enter * 0.25;
     const tz = baseZ + travel * 1.6 - enter * (baseZ - 2.2);
     camera.position.x = damp(camera.position.x, tx, 6, dt);
     camera.position.y = damp(camera.position.y, ty, 6, dt);
     camera.position.z = damp(camera.position.z, tz, 6, dt);
-    look.current.set(damp(look.current.x, x, 7, dt), 0.25, 0);
+    look.current.set(damp(look.current.x, x + frameX, 7, dt), damp(look.current.y, 0.25 + frameY, 7, dt), 0);
     camera.lookAt(look.current);
 
     // Blend lighting toward the active faculty's accent.
@@ -51,7 +54,11 @@ function CameraRig({ rig }: { rig: Props["rig"] }) {
     const f = progress - i;
     const target = ACCENTS[i].clone().lerp(ACCENTS[Math.min(2, i + 1)], f);
     accent.current.lerp(target, 1 - Math.exp(-4 * dt));
-    if (scene.fog) (scene.fog as THREE.Fog).color.copy(accent.current).multiplyScalar(0.035);
+    if (scene.fog) {
+      const fog = (scene.fog as THREE.Fog).color.copy(accent.current).multiplyScalar(0.035);
+      // Keep the background identical to the fog so the floor never shows a horizon seam.
+      if (scene.background instanceof THREE.Color) scene.background.copy(fog);
+    }
     if (fill.current) {
       fill.current.color.copy(accent.current);
       fill.current.position.set(x - 4, 3, 3);
@@ -68,7 +75,7 @@ function CameraRig({ rig }: { rig: Props["rig"] }) {
   return (
     <>
       <directionalLight ref={key} intensity={1.6} color="#fff4e6" />
-      <spotLight ref={fill} intensity={60} angle={0.6} penumbra={1} distance={20} />
+      <spotLight ref={fill} intensity={38} angle={0.6} penumbra={1} distance={20} />
     </>
   );
 }

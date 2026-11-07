@@ -236,7 +236,7 @@ export function HomeExperience() {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-ink via-ink/60 to-transparent" />
 
       {/* Copy */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 mx-auto flex max-w-7xl flex-col gap-6 px-5 pb-20 md:flex-row md:items-end md:justify-between md:px-10 md:pb-16">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 mx-auto flex max-w-7xl flex-col gap-6 px-5 pb-14 md:flex-row md:items-end md:justify-between md:px-10 md:pb-16">
         <div ref={textRef} key={index} className="max-w-xl" aria-live="polite">
           <div data-anim className="eyebrow mb-4 flex items-center gap-3">
             <span style={{ color: f.accent }}>{f.index}</span>
@@ -244,9 +244,9 @@ export function HomeExperience() {
             <span>{String(FACULTIES.length).padStart(2, "0")}</span>
             <span className="ml-2">Faculty of</span>
           </div>
-          <h1 data-anim className="h-display text-[clamp(3.5rem,11vw,9rem)]">{f.name}</h1>
+          <h1 data-anim className="h-display text-[clamp(3.25rem,11vw,9rem)]">{f.name}</h1>
           <p data-anim className="mt-4 font-display text-xl italic text-bone-dim md:text-2xl">{f.tagline}</p>
-          <p data-anim className="mt-3 max-w-md text-sm leading-relaxed text-bone-mute">{f.description}</p>
+          <p data-anim className="mt-3 hidden max-w-md text-sm leading-relaxed text-bone-mute sm:block">{f.description}</p>
           <button
             data-anim
             onClick={() => enter(index)}

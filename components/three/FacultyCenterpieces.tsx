@@ -228,7 +228,7 @@ export function LawPiece({ weight, hovered }: PieceProps) {
   const light = useRef<THREE.PointLight>(null);
   const tilt = useRef(0.18);
 
-  const stone = { color: "#c9c3b8", roughness: 0.85, metalness: 0.05 };
+  const stone = { color: "#8d877e", roughness: 0.9, metalness: 0.05 };
   const seam = (key: string, pos: [number, number, number], size: [number, number, number]) => (
     <mesh key={key} position={pos}>
       <boxGeometry args={size} />

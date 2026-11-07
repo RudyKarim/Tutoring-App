@@ -68,7 +68,7 @@ export function Dashboard({ user, bookings, favoriteTutors }: { user: Profile; b
         )}
       </section>
 
-      {toast && <div role="status" className="fixed bottom-16 left-1/2 z-50 -translate-x-1/2 rounded-full bg-bone px-5 py-2 text-sm text-ink">{toast}</div>}
+      {toast && <div role="status" className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 rounded-full bg-bone px-5 py-2 text-sm text-ink">{toast}</div>}
     </div>
   );
 }
