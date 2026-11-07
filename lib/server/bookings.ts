@@ -36,7 +36,8 @@ export async function createBooking(user: Profile, raw: unknown) {
 
   return withLock(tutor.id, async () => {
     await assertSlotFree(tutor.id, user.id, input.date, input.start, input.duration);
-    const { acceptPolicy: _a, ...rest } = input; // eslint-disable-line @typescript-eslint/no-unused-vars
+    const { acceptPolicy, ...rest } = input;
+    void acceptPolicy;
     return repo.insertBooking({ ...rest, userId: user.id, price: priceFor(tutor, input.duration), status: "confirmed" });
   });
 }

@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --accent: #ece8e1;
+}
+
+html, body { background: #07070a; color: #ece8e1; }
+body { font-family: var(--font-sans), system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+::selection { background: rgba(236, 232, 225, 0.18); }
+
+/* Lenis */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-stopped { overflow: hidden; }
+
+/* Film grain + vignette for the cinematic matte look */
+.grain::after {
+  content: ""; position: fixed; inset: -50%; pointer-events: none; z-index: 60; opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  animation: grain 8s steps(10) infinite;
+}
+@keyframes grain { 0%,100% { transform: translate(0,0) } 30% { transform: translate(-3%,2%) } 60% { transform: translate(2%,-3%) } 90% { transform: translate(-1%,3%) } }
+
+@layer components {
+  .eyebrow { @apply text-[11px] uppercase tracking-widest2 text-bone-dim; }
+  .h-display { @apply font-display font-light leading-[0.95] tracking-tight; }
+  .panel {
+    @apply rounded-2xl border border-white/[0.07] bg-gradient-to-b from-white/[0.045] to-white/[0.01] backdrop-blur-md;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 30px 60px -30px rgba(0,0,0,0.8);
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm tracking-wide transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary { @apply btn bg-bone text-ink hover:bg-white; }
+  .btn-ghost { @apply btn border border-white/15 text-bone hover:border-white/40 hover:bg-white/[0.04]; }
+  .input {
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-bone placeholder:text-bone-mute outline-none transition focus:border-white/35 focus:bg-white/[0.05];
+  }
+  .input-error { @apply border-law/70 focus:border-law; }
+  .label { @apply mb-2 block text-xs uppercase tracking-[0.2em] text-bone-dim; }
+  .chip { @apply rounded-full border border-white/10 px-3 py-1 text-xs text-bone-dim; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

@@ -27,7 +27,8 @@ export function userClient() {
 const admin = () =>
   createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
 
-type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line
+type Row = Record<string, any>;
 
 const toBooking = (r: Row): Booking => ({
   id: r.id, userId: r.user_id, tutorId: r.tutor_id, specialization: r.specialization, topic: r.topic, notes: r.notes ?? "",
