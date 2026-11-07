@@ -7,6 +7,7 @@ import { TutorCard } from "@/components/tutors/TutorCard";
 import { TiltPanel } from "@/components/ui/TiltPanel";
 import { Reveal } from "@/components/ui/Reveal";
 import { Footer } from "@/components/ui/Footer";
+import { PageReveal } from "@/components/ui/PageReveal";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function FacultyPage({ params }: { params: { slug: string }
 
   return (
     <>
+      <PageReveal accent={faculty.accent} />
       <main>
         <section className="relative overflow-hidden px-5 pb-20 pt-40 md:px-10">
           <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse 60% 50% at 70% 20%, ${faculty.accent}26, transparent 70%)` }} />

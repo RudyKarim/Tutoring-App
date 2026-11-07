@@ -10,6 +10,8 @@ import * as THREE from "three";
 export interface PieceProps {
   weight: React.MutableRefObject<number>;
   hovered: React.MutableRefObject<boolean>;
+  /** 1 = full motion, ~0.15 when the user prefers reduced motion. */
+  motion: number;
 }
 
 const damp = THREE.MathUtils.damp;
@@ -53,7 +55,7 @@ function gearGeometry(radius: number, teeth: number, depth: number, hole = 0.18)
   return g;
 }
 
-export function EngineeringPiece({ weight, hovered }: PieceProps) {
+export function EngineeringPiece({ weight, hovered, motion }: PieceProps) {
   const gears = useMemo(
     () => [
       { r: 1.15, t: 24, pos: [-0.55, 0.35, 0] as const, dir: 1 },
@@ -68,10 +70,11 @@ export function EngineeringPiece({ weight, hovered }: PieceProps) {
   const ringMat = useRef<THREE.MeshStandardMaterial>(null);
   const light = useRef<THREE.PointLight>(null);
   const speed = useRef(0.3);
+  const nuts = useRef<THREE.Group>(null);
 
   useFrame((_, dt) => {
     const w = weight.current;
-    speed.current = damp(speed.current, 0.25 + w * 0.9 + (hovered.current ? 0.8 : 0), 3, dt);
+    speed.current = damp(speed.current, (0.25 + w * 0.9 + (hovered.current ? 0.8 : 0)) * motion, 3, dt);
     const base = speed.current * dt;
     gears.forEach((g, i) => {
       const m = gearRefs.current[i];
@@ -80,8 +83,12 @@ export function EngineeringPiece({ weight, hovered }: PieceProps) {
     });
     if (turbine.current) turbine.current.rotation.z -= base * 6;
     if (rings.current) {
-      rings.current.rotation.x += dt * 0.15;
-      rings.current.rotation.y += dt * 0.22;
+      rings.current.rotation.x += dt * 0.15 * motion;
+      rings.current.rotation.y += dt * 0.22 * motion;
+    }
+    if (nuts.current) {
+      nuts.current.rotation.z += dt * 0.35 * motion;
+      nuts.current.children.forEach((c, i) => { c.rotation.x += dt * (0.6 + i * 0.1) * motion; c.rotation.y += dt * 0.4 * motion; });
     }
     if (ringMat.current) ringMat.current.emissiveIntensity = damp(ringMat.current.emissiveIntensity, 0.6 + w * 2.6, 4, dt);
     if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 14, 4, dt);
@@ -115,6 +122,24 @@ export function EngineeringPiece({ weight, hovered }: PieceProps) {
           </mesh>
         ))}
       </group>
+      {/* Bearing ring around the turbine */}
+      <mesh position={[-0.55, 0.35, -0.65]}>
+        <torusGeometry args={[1.08, 0.07, 16, 96]} />
+        <meshStandardMaterial color="#3a414a" metalness={1} roughness={0.2} />
+      </mesh>
+      {/* Orbiting precision components */}
+      <group ref={nuts} position={[0.15, 0.2, 0]}>
+        {Array.from({ length: 7 }, (_, i) => {
+          const a = (i / 7) * Math.PI * 2;
+          const r = 2.15 + (i % 2) * 0.35;
+          return (
+            <mesh key={i} position={[Math.cos(a) * r, Math.sin(a) * r * 0.62, Math.sin(a * 2) * 0.5]}>
+              {i % 3 === 0 ? <cylinderGeometry args={[0.13, 0.13, 0.09, 6]} /> : <boxGeometry args={[0.07, 0.36, 0.07]} />}
+              <meshStandardMaterial color="#9aa3ad" metalness={1} roughness={0.25} />
+            </mesh>
+          );
+        })}
+      </group>
       {/* Blue light rings */}
       <group ref={rings} position={[0.15, 0.2, -0.2]}>
         {[2.1, 2.45, 2.8].map((r, i) => (
@@ -128,11 +153,19 @@ export function EngineeringPiece({ weight, hovered }: PieceProps) {
   );
 }
 
+const FLOATERS: { p: [number, number, number]; s: number; k: number }[] = [
+  { p: [-2.4, 1.9, -0.6], s: 0.26, k: 0 },
+  { p: [-1.1, 2.6, -0.9], s: 0.18, k: 1 },
+  { p: [1.3, 2.9, -0.5], s: 0.22, k: 2 },
+  { p: [2.5, 1.6, -0.8], s: 0.3, k: 1 },
+  { p: [0.2, 3.3, -1.2], s: 0.16, k: 0 },
+];
+
 /* ------------------------------------------------------------------ */
 /* Finance — metal columns, gold price curve, rings, coin stack        */
 /* ------------------------------------------------------------------ */
 
-export function FinancePiece({ weight, hovered }: PieceProps) {
+export function FinancePiece({ weight, hovered, motion }: PieceProps) {
   const heights = [0.9, 1.4, 1.1, 1.9, 1.6, 2.5, 2.2, 3.0];
   const curve = useMemo(() => {
     const pts = heights.map((h, i) => new THREE.Vector3(-1.75 + i * 0.5, h - 1.05 + 0.35, 0.45));
@@ -146,6 +179,7 @@ export function FinancePiece({ weight, hovered }: PieceProps) {
   const cols = useRef<(THREE.Mesh | null)[]>([]);
   const light = useRef<THREE.PointLight>(null);
   const draw = useRef(0);
+  const shapes = useRef<THREE.Group>(null);
 
   useFrame((state, dt) => {
     const w = weight.current;
@@ -161,10 +195,17 @@ export function FinancePiece({ weight, hovered }: PieceProps) {
       c.position.y = -1.05 + c.scale.y / 2;
     });
     if (rings.current) {
-      rings.current.rotation.y += dt * (0.2 + w * 0.4);
+      rings.current.rotation.y += dt * (0.2 + w * 0.4) * motion;
       rings.current.rotation.x = Math.sin(t * 0.3) * 0.25 + 1.2;
     }
-    if (coins.current) coins.current.rotation.y += dt * (0.3 + (hovered.current ? 1.2 : 0));
+    if (coins.current) coins.current.rotation.y += dt * (0.3 + (hovered.current ? 1.2 : 0)) * motion;
+    if (shapes.current) {
+      shapes.current.children.forEach((c, i) => {
+        c.position.y = FLOATERS[i].p[1] + Math.sin(t * 0.7 * motion + i * 1.3) * 0.12;
+        c.rotation.x += dt * 0.3 * motion;
+        c.rotation.y += dt * (0.25 + i * 0.05) * motion;
+      });
+    }
     if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 12, 4, dt);
   });
 
@@ -193,6 +234,21 @@ export function FinancePiece({ weight, hovered }: PieceProps) {
           </mesh>
         ))}
       </group>
+      {/* Floating geometric data sculptures */}
+      <group ref={shapes}>
+        {FLOATERS.map((f, i) => (
+          <group key={i} position={f.p}>
+            <mesh>
+              {f.k === 0 ? <octahedronGeometry args={[f.s]} /> : f.k === 1 ? <icosahedronGeometry args={[f.s, 0]} /> : <tetrahedronGeometry args={[f.s]} />}
+              <meshStandardMaterial color="#1b1a17" metalness={1} roughness={0.15} />
+            </mesh>
+            <lineSegments>
+              <edgesGeometry args={[f.k === 0 ? new THREE.OctahedronGeometry(f.s * 1.01) : f.k === 1 ? new THREE.IcosahedronGeometry(f.s * 1.01, 0) : new THREE.TetrahedronGeometry(f.s * 1.01)]} />
+              <lineBasicMaterial color="#d8b35a" toneMapped={false} />
+            </lineSegments>
+          </group>
+        ))}
+      </group>
       {/* Coin stack */}
       <group ref={coins} position={[2.45, -1.05, 0.6]}>
         {Array.from({ length: 9 }, (_, i) => (
@@ -210,7 +266,7 @@ export function FinancePiece({ weight, hovered }: PieceProps) {
 /* Law — stone portico, burgundy light seams, scale of justice         */
 /* ------------------------------------------------------------------ */
 
-export function LawPiece({ weight, hovered }: PieceProps) {
+export function LawPiece({ weight, hovered, motion }: PieceProps) {
   const pediment = useMemo(() => {
     const s = new THREE.Shape();
     s.moveTo(-2.1, 0);
@@ -228,7 +284,7 @@ export function LawPiece({ weight, hovered }: PieceProps) {
   const light = useRef<THREE.PointLight>(null);
   const tilt = useRef(0.18);
 
-  const stone = { color: "#8d877e", roughness: 0.9, metalness: 0.05 };
+  const stone = { color: "#57534f", roughness: 0.72, metalness: 0.1 };
   const seam = (key: string, pos: [number, number, number], size: [number, number, number]) => (
     <mesh key={key} position={pos}>
       <boxGeometry args={size} />
@@ -247,12 +303,12 @@ export function LawPiece({ weight, hovered }: PieceProps) {
     const t = state.clock.elapsedTime;
     seamMats.current.forEach((m) => { m.emissiveIntensity = damp(m.emissiveIntensity, 0.4 + w * 2.8, 3, dt); });
     // Scale settles toward balance when focused; tips when hovered.
-    const target = hovered.current ? Math.sin(t * 2.2) * 0.22 : (1 - w) * 0.18 + Math.sin(t * 0.9) * 0.03;
+    const target = hovered.current ? Math.sin(t * 2.2 * motion) * 0.22 : (1 - w) * 0.18 + Math.sin(t * 0.9 * motion) * 0.03;
     tilt.current = damp(tilt.current, target, 2.5, dt);
     if (beam.current) beam.current.rotation.z = tilt.current;
     if (panL.current) panL.current.rotation.z = -tilt.current;
     if (panR.current) panR.current.rotation.z = -tilt.current;
-    if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 12, 4, dt);
+    if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 13, 4, dt);
   });
 
   const columnsX = [-1.6, -0.8, 0.8, 1.6];

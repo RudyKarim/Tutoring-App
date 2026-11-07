@@ -39,10 +39,15 @@ For a production build: `npm run build && npm start`.
 | Tutor and faculty sample data | `lib/data.ts` |
 | Database schema for live mode | `supabase/migrations/0001_init.sql` |
 
-### Homepage controls
+### Homepage — horizontal 3D faculty gallery
 
-Horizontal trackpad swipe, mouse wheel, click-and-drag, touch swipe, the arrow buttons, or the **← →** keys move between faculties.
-Scrolling down on Law continues into the page. Click the centrepiece or **Explore →** to fly into a faculty; the browser back button returns you to the faculty you left.
+The hero is one continuous 3D world with the three sculptures standing in a row on lit pedestals. The active one is centred, and its neighbours show at the screen edges.
+
+- **Navigate:** horizontal trackpad scroll (the scene follows your fingers with inertia, then settles), mouse wheel, click-and-drag, touch swipe, the side arrows, the faculty labels at the bottom, or the **← →** keys.
+- **Transitions:** the outgoing piece rotates away and recedes, the camera travels sideways, the next piece swings in from depth, and the lighting, background glow and large title all change to the new faculty.
+- **Never trapped:** scrolling down on Law continues into the page; scrolling up on Engineering is left to the browser; below the hero the page scrolls normally.
+- **Enter a faculty:** click the centred sculpture or **Explore … →**. The camera flies in and the faculty page fades up. The back button returns you to the faculty you left.
+- **Accessibility and performance:** honours reduced-motion settings, falls back to a non-3D version when WebGL isn't available, stops rendering when the hero is off-screen, and lowers render resolution on slower GPUs.
 
 ### Booking rules
 
