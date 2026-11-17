@@ -1,12 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { Cormorant_Garamond, Inter } from "next/font/google";
+import { Inter, Merriweather } from "next/font/google";
 import "./globals.css";
 import { SiteNav } from "@/components/ui/SiteNav";
 import { SmoothScroll } from "@/components/ui/SmoothScroll";
 import { DemoBanner } from "@/components/ui/DemoBanner";
 import { repo } from "@/lib/server/repo";
 
-const display = Cormorant_Garamond({ subsets: ["latin"], weight: ["300", "400", "500"], style: ["normal", "italic"], variable: "--font-display", display: "swap" });
+// Same pairing as usek.edu.lb: Merriweather for headings, Inter for body text.
+const display = Merriweather({ subsets: ["latin"], weight: ["300", "400", "700"], style: ["normal", "italic"], variable: "--font-display", display: "swap" });
 const sans = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {

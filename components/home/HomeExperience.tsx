@@ -371,12 +371,12 @@ export function HomeExperience() {
         ))}
       </div>
 
-      {/* Monumental title, behind the sculpture */}
-      <h1
+      {/* Monumental faculty title, behind the sculpture (the page's h1 is the intro line below) */}
+      <h2
         ref={titleRef}
         key={shown}
         aria-live="polite"
-        className="pointer-events-none absolute inset-x-0 top-[17%] whitespace-nowrap text-center font-display font-light uppercase leading-none tracking-[0.04em] text-transparent md:top-[10.5%]"
+        className="pointer-events-none absolute inset-x-0 top-[max(17%,156px)] whitespace-nowrap text-center font-display font-light uppercase leading-none tracking-[0.04em] text-transparent md:top-[max(10.5%,140px)]"
         // Size the word to the viewport so long names (ENGINEERING) never clip or wrap.
         style={{ fontSize: `clamp(2.6rem, min(15.5vw, ${(90 / (f.name.length * 0.8)).toFixed(2)}vw), 16rem)` }}
       >
@@ -396,7 +396,7 @@ export function HomeExperience() {
             {c}
           </span>
         ))}
-      </h1>
+      </h2>
 
       {/* The 3D world */}
       <div className="absolute inset-0">
@@ -420,6 +420,16 @@ export function HomeExperience() {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-ink via-ink/50 to-transparent" />
 
       <div ref={ui} className="pointer-events-none absolute inset-0 z-10">
+        {/* What this site is, in one glance — kept small so it never competes with the sculpture */}
+        <div className="absolute inset-x-0 top-[72px] px-5 text-center md:top-[84px]">
+          <h1 className="font-display text-[13px] tracking-wide text-bone md:text-[15px]">
+            Private tutoring in Engineering, Finance and Law
+          </h1>
+          <p className="mx-auto mt-1 max-w-md text-[11px] leading-snug text-bone-mute md:max-w-none md:text-[12px]">
+            One-to-one sessions for university students, taught by practising professionals.
+          </p>
+        </div>
+
         {/* LEFT / RIGHT: previous and next faculty */}
         <button
           onClick={() => goTo(indexRef.current - 1)}

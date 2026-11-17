@@ -1,7 +1,7 @@
 # Praxis — premium 3D tutoring platform
 
 Private tutoring in **Engineering, Finance and Law**, with a cinematic 3D homepage.
-Built with Next.js 14 (App Router), React 18, TypeScript, Tailwind CSS, Three.js / React Three Fiber, GSAP and Lenis.
+Built with Next.js 14 (App Router), React 18, TypeScript, Tailwind CSS, Three.js / React Three Fiber, GSAP and Lenis. Typography matches usek.edu.lb: Merriweather for headings, Inter for body text.
 
 ## Run it on any laptop
 

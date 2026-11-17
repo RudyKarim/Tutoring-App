@@ -32,7 +32,7 @@ export default async function FacultyPage({ params }: { params: { slug: string }
             <Reveal>
               <Link href="/" className="eyebrow hover:text-bone">← All faculties</Link>
               <div className="eyebrow mt-10" style={{ color: faculty.accent }}>Faculty {faculty.index}</div>
-              <h1 className="h-display mt-3 text-[clamp(4rem,13vw,11rem)]">{faculty.name}</h1>
+              <h1 className="h-display mt-3 text-[clamp(2.75rem,13vw,11rem)]">{faculty.name}</h1>
               <p className="mt-4 font-display text-2xl italic text-bone-dim md:text-3xl">{faculty.tagline}</p>
               <p className="mt-4 max-w-xl text-bone-mute">{faculty.description}</p>
             </Reveal>
