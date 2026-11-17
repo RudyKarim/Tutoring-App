@@ -132,6 +132,39 @@ export function HomeExperience() {
     return () => io.disconnect();
   }, []);
 
+  // Tell the 3D scene how much room it has: from the baseline of the largest faculty title down to
+  // the bottom bar. The scene scales and places the sculptures so they never cover either.
+  const measureBand = useCallback(() => {
+    const sec = section.current, h2 = titleRef.current;
+    const span = h2?.querySelector<HTMLElement>("[data-char]");
+    const nav = sec?.querySelector("nav[aria-label=Faculties]");
+    if (!sec || !h2 || !span || !nav) return;
+    const top0 = sec.getBoundingClientRect().top;
+    const probe = document.createElement("span");
+    probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+    span.appendChild(probe);
+    const baseline = probe.getBoundingClientRect().top;
+    probe.remove();
+    const h2Top = h2.getBoundingClientRect().top;
+    const fontPx = parseFloat(getComputedStyle(span).fontSize);
+    const ratio = (baseline - h2Top) / fontPx; // baseline position as a fraction of the font size
+    // Same size rule as the title's inline style, for every faculty name; use the largest.
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const vw = window.innerWidth / 100;
+    const biggest = Math.max(...FACULTIES.map((x) => Math.min(16 * rem, Math.max(2.6 * rem, Math.min(15.5 * vw, (90 / (x.name.length * 0.8)) * vw)))));
+    rig.current.band = { top: h2Top - top0 + ratio * biggest, bottom: nav.getBoundingClientRect().top - top0 };
+  }, []);
+  useLayoutEffect(() => {
+    measureBand();
+  }, [shown, measureBand]);
+  useEffect(() => {
+    let raf = 0;
+    const onResize = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measureBand); };
+    window.addEventListener("resize", onResize);
+    document.fonts?.ready.then(measureBand).catch(() => {});
+    return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", onResize); };
+  }, [measureBand]);
+
   // Pause the 3D scene while the tab is hidden.
   useEffect(() => {
     const onVis = () => setTabVisible(!document.hidden);

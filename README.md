@@ -43,6 +43,7 @@ For a production build: `npm run build && npm start`.
 
 The hero is one continuous 3D world with the three sculptures standing in a row on lit pedestals. The active one is centred, and its neighbours show at the screen edges.
 
+- **Always readable:** each sculpture is automatically sized and placed to sit between the faculty title and the bottom bar on any screen (it never grows beyond its original size, so phones are unchanged).
 - **Navigate:** horizontal trackpad scroll (the scene follows your fingers with inertia, then settles), mouse wheel, click-and-drag, touch swipe, the side arrows, the faculty labels at the bottom, or the **← →** keys.
 - **Transitions:** the outgoing piece rotates away and recedes, the camera travels sideways, the next piece swings in from depth, and the lighting, background glow and large title all change to the new faculty.
 - **Never trapped:** scrolling down on Law continues into the page; scrolling up on Engineering is left to the browser; below the hero the page scrolls normally.

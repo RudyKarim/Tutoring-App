@@ -101,7 +101,8 @@ const GEARS = [
 const NUTS = Array.from({ length: 7 }, (_, i) => {
   const a = (i / 7) * Math.PI * 2;
   const r = 2.15 + (i % 2) * 0.35;
-  return { i, hex: i % 3 === 0, pos: [Math.cos(a) * r, Math.sin(a) * r * 0.62, Math.sin(a * 2) * 0.5] as V3, rx: 0, ry: 0 };
+  // Horizontal orbit around the gear train (kept low so it never rises into the faculty title).
+  return { i, hex: i % 3 === 0, pos: [Math.cos(a) * r, Math.sin(a * 2) * 0.25, Math.sin(a) * r * 0.8] as V3, rx: 0, ry: 0 };
 });
 
 export function EngineeringPiece({ weight, hovered, motion, live, low }: PieceProps) {
@@ -113,7 +114,13 @@ export function EngineeringPiece({ weight, hovered, motion, live, low }: PiecePr
     const blades = merge(Array.from({ length: 14 }, (_, i) => place(new THREE.BoxGeometry(0.07, 1.9, 0.28), [0, 0, 0], [0, 0.5, (i / 14) * Math.PI * 2])));
     const bearing = new THREE.TorusGeometry(1.08, 0.07, seg(12, low), seg(72, low));
     // The inner ring brightens with focus; the outer two keep a steady glow (two draws, not three).
-    const ringGeo = (i: number) => place(new THREE.TorusGeometry([2.1, 2.45, 2.8][i], 0.012, 4, seg(96, low)), [0, 0, 0], [Math.PI / 2 + i * 0.5, i * 0.7, 0]);
+    // Rings orbit almost flat (small tilts) instead of tumbling, so they stay below the title.
+    const ringGeo = (i: number) => {
+      const g = new THREE.TorusGeometry([2.1, 2.45, 2.8][i], 0.012, 4, seg(96, low));
+      g.rotateX(Math.PI / 2 + [0.22, -0.32, 0.42][i]); // lay flat, then tilt slightly…
+      g.rotateY(i * 0.7); // …then turn about the vertical axis (tilt never grows)
+      return place(g);
+    };
     const rings = ringGeo(0);
     const ringsOuter = merge([ringGeo(1), ringGeo(2)]);
     const hex = new THREE.CylinderGeometry(0.13, 0.13, 0.09, 6);
@@ -127,6 +134,7 @@ export function EngineeringPiece({ weight, hovered, motion, live, low }: PiecePr
   const rings = useRef<THREE.Group>(null);
   const ringMat = useRef<THREE.MeshStandardMaterial>(null);
   const speed = useRef(0.3);
+  const wobble = useRef(0);
   const nuts = useRef<THREE.Group>(null);
   const hexes = useRef<THREE.InstancedMesh>(null);
   const bars = useRef<THREE.InstancedMesh>(null);
@@ -145,11 +153,12 @@ export function EngineeringPiece({ weight, hovered, motion, live, low }: PiecePr
     }
     if (turbine.current) turbine.current.rotation.z -= base * 6;
     if (rings.current) {
-      rings.current.rotation.x += dt * 0.15 * m;
+      wobble.current += dt * m;
+      rings.current.rotation.x = Math.sin(wobble.current * 0.5) * 0.12;
       rings.current.rotation.y += dt * 0.22 * m;
     }
     if (nuts.current && hexes.current && bars.current) {
-      nuts.current.rotation.z += dt * 0.35 * m;
+      nuts.current.rotation.y += dt * 0.35 * m;
       let h = 0, b = 0;
       for (const n of state.current) {
         n.rx += dt * (0.6 + n.i * 0.1) * m;
@@ -201,7 +210,7 @@ export function EngineeringPiece({ weight, hovered, motion, live, low }: PiecePr
         </group>
       )}
       {/* Blue light rings (merged) */}
-      <group ref={rings} position={[0.15, 0.2, -0.2]}>
+      <group ref={rings} position={[0.15, 0.2, -0.2]} rotation={[0, 0, 0, "YXZ"]}>
         <mesh geometry={geo.rings}>
           <meshStandardMaterial ref={ringMat} color="#0c1f36" emissive="#5aa9ff" emissiveIntensity={1} toneMapped={false} />
         </mesh>
@@ -218,11 +227,12 @@ export function EngineeringPiece({ weight, hovered, motion, live, low }: PiecePr
 /* ------------------------------------------------------------------ */
 
 const FLOATERS: { p: V3; s: number; k: 0 | 1 | 2 }[] = [
-  { p: [-2.4, 1.9, -0.6], s: 0.26, k: 0 },
-  { p: [-1.1, 2.6, -0.9], s: 0.18, k: 1 },
-  { p: [1.3, 2.9, -0.5], s: 0.22, k: 2 },
-  { p: [2.5, 1.6, -0.8], s: 0.3, k: 1 },
-  { p: [0.2, 3.3, -1.2], s: 0.16, k: 0 },
+  // Kept around the top of the columns so they never rise into the faculty title.
+  { p: [-2.4, 1.35, -0.6], s: 0.26, k: 0 },
+  { p: [-1.1, 1.55, -0.9], s: 0.18, k: 1 },
+  { p: [1.3, 1.75, -0.5], s: 0.22, k: 2 },
+  { p: [2.5, 1.2, -0.8], s: 0.3, k: 1 },
+  { p: [0.2, 1.7, -1.2], s: 0.16, k: 0 },
 ];
 const HEIGHTS = [0.9, 1.4, 1.1, 1.9, 1.6, 2.5, 2.2, 3.0];
 const polyFor = (k: 0 | 1 | 2) => (k === 0 ? new THREE.OctahedronGeometry(1) : k === 1 ? new THREE.IcosahedronGeometry(1, 0) : new THREE.TetrahedronGeometry(1));
@@ -330,7 +340,8 @@ export function FinancePiece({ weight, hovered, motion, live, low }: PieceProps)
       <mesh geometry={geo.tube}>
         <meshStandardMaterial ref={tubeMat} color="#3d2c08" emissive="#d8b35a" emissiveIntensity={1} metalness={1} roughness={0.2} toneMapped={false} />
       </mesh>
-      <group ref={rings} position={[0, 0.5, -0.4]}>
+      {/* YXZ: tilt first, then spin about the vertical, so the rings sweep around rather than up into the title */}
+      <group ref={rings} position={[0, 0.4, -0.4]} rotation={[1.2, 0, 0, "YXZ"]}>
         <mesh geometry={geo.rings}>
           <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.18} />
         </mesh>

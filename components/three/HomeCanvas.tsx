@@ -9,6 +9,20 @@ import { EngineeringPiece, FinancePiece, LawPiece, type PieceProps } from "./Fac
 export const SPACING = 6.6;
 const ACCENTS = ["#5aa9ff", "#d8b35a", "#b0384a"].map((c) => new THREE.Color(c));
 
+/** `?debug3d` exposes screen-space bounds of the sculptures (used by the layout tests). */
+const DEBUG = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug3d");
+
+/**
+ * Fitting the sculptures between the faculty title and the bottom bar.
+ * Effective vertical extent of the tallest sculpture at scale 1, in world units, measured on screen:
+ * top of the finance price curve, and the front edge of the pedestal (which projects lower
+ * than its true height because it is nearer the camera).
+ */
+const FIT_TOP = 2.42;
+const FIT_BOTTOM = -2.5;
+const FIT_MARGIN_TOP = 12; // px between the title's letters and the top of the sculpture
+const FIT_MARGIN_BOTTOM = 8; // px between the pedestal and the bottom bar
+
 export type Tier = "high" | "low";
 
 /** Mutable state shared between the DOM controller and the 3D scene (no React re-renders). */
@@ -18,6 +32,8 @@ export interface Rig {
   pointer: { x: number; y: number }; // -1..1
   dragging: boolean;
   reduced: boolean; // prefers-reduced-motion
+  /** Free vertical band for the sculpture, in px from the top of the hero (set by the page). */
+  band?: { top: number; bottom: number };
 }
 
 interface Props {
@@ -37,6 +53,7 @@ interface Shared {
   slots: (THREE.Group | null)[];
   hovered: boolean;
   busy: boolean; // camera still converging
+  fit: { s: number; drop: number }; // sculpture scale and vertical offset that fit the free band
 }
 
 const damp = THREE.MathUtils.damp;
@@ -52,7 +69,7 @@ const _target = new THREE.Color();
 const _p = new THREE.Vector3();
 
 function CameraRig({ rig, shared, low }: { rig: Props["rig"]; shared: Shared; low: boolean }) {
-  const { camera, scene } = useThree();
+  const { camera, scene, size } = useThree();
   const { narrow, aspect } = useFraming();
   const look = useRef(new THREE.Vector3(0, 0.4, 0));
   const accent = useRef(ACCENTS[0].clone());
@@ -70,15 +87,36 @@ function CameraRig({ rig, shared, low }: { rig: Props["rig"]; shared: Shared; lo
     const settled = 1 - Math.min(1, Math.abs(progress - Math.round(progress)) * 4);
     const par = reduced ? 0 : 0.45 * settled * (1 - enter);
     const frameY = narrow ? -0.35 : 0;
+
+    // Fit: largest scale (never above the original) whose top clears the title and whose pedestal
+    // clears the bottom bar; then the vertical offset closest to the original placement.
+    const band = rig.current.band;
+    const lookY = 0.45 + frameY;
+    const h = size.height;
+    const ppu = h / (2 * baseZ * Math.tan(THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov / 2)));
+    const base = narrow ? 0.86 : 1; // Slot's own narrow-screen scale
+    let fs = 1, drop = 0;
+    if (band && band.bottom > band.top) {
+      const top = band.top + FIT_MARGIN_TOP, bottom = band.bottom - FIT_MARGIN_BOTTOM;
+      fs = Math.max(0.45, Math.min(1, (bottom - top) / ((FIT_TOP - FIT_BOTTOM) * base * ppu)));
+      const maxDrop = lookY + (h / 2 - top) / ppu - fs * base * FIT_TOP; // highest allowed
+      const minDrop = lookY - (bottom - h / 2) / ppu - fs * base * FIT_BOTTOM; // lowest allowed
+      drop = minDrop > maxDrop ? (minDrop + maxDrop) / 2 : Math.min(maxDrop, Math.max(minDrop, 0));
+    }
+    shared.fit.s = fs;
+    shared.fit.drop = drop;
+
+    // Fly-in: head for the (possibly smaller, lower) sculpture rather than the original spot.
+    const pieceY = drop + fs * base * 0.45;
     const tx = x + pointer.x * par;
-    const ty = 0.75 + frameY + pointer.y * par * 0.5 - travel * 0.25 - enter * 0.35;
-    const tz = baseZ + travel * 2.2 - enter * (baseZ - 2.4);
+    const ty = 0.75 + frameY + pointer.y * par * 0.5 - travel * 0.25 - enter * 0.35 + enter * (pieceY - 0.45);
+    const tz = baseZ + travel * 2.2 - enter * (baseZ - 2.4 * Math.max(0.6, fs));
     const k = reduced ? 20 : 5;
     camera.position.x = damp(camera.position.x, tx, k, dt);
     camera.position.y = damp(camera.position.y, ty, k, dt);
     camera.position.z = damp(camera.position.z, tz, k, dt);
     look.current.x = damp(look.current.x, x, k + 1, dt);
-    look.current.y = damp(look.current.y, 0.45 + frameY + enter * 0.1, k, dt);
+    look.current.y = damp(look.current.y, 0.45 + frameY + enter * (0.1 + pieceY - 0.45), k, dt);
     camera.lookAt(look.current);
     shared.busy = Math.abs(camera.position.x - tx) + Math.abs(camera.position.y - ty) + Math.abs(camera.position.z - tz) + Math.abs(look.current.x - x) > 0.002;
 
@@ -139,7 +177,9 @@ function PieceLights({ rig, shared, low }: { rig: Props["rig"]; shared: Shared; 
       if (!l || !g) return;
       const cfg = PIECE_LIGHTS[j];
       l.color.copy(cfg.color);
-      l.intensity = intensity.current[j];
+      // Lights are placed in the (scaled) sculpture space; compensate so illumination is unchanged.
+      l.intensity = intensity.current[j] * shared.fit.s * shared.fit.s;
+      l.distance = 9 * shared.fit.s;
       l.position.copy(_p.set(cfg.pos[0], cfg.pos[1], cfg.pos[2]).applyMatrix4(g.matrixWorld));
     });
   });
@@ -191,7 +231,12 @@ function Slot({ index, rig, shared, low, fade, onSelect, children }: { index: nu
     // Skip drawing (and animating) pieces that are fully off-screen.
     live.current = dist < 1.75;
     g.visible = live.current;
-    if (floor.current) floor.current.visible = live.current;
+    const { s: fs, drop } = shared.fit;
+    if (floor.current) {
+      floor.current.visible = live.current;
+      floor.current.position.y = drop - 1.5 * fs;
+      floor.current.scale.setScalar(fs);
+    }
     if (!live.current) return;
     const t = state.clock.elapsedTime;
     const m = reduced ? 0.15 : 1;
@@ -200,8 +245,8 @@ function Slot({ index, rig, shared, low, fade, onSelect, children }: { index: nu
     g.rotation.y = -offset * 0.85 + Math.sin(t * 0.22 * m + index) * 0.1 * m;
     g.position.z = -c * 3.6;
     g.position.x = -Math.sign(offset) * c * 0.6;
-    g.position.y = Math.sin(t * 0.6 * m + index * 2) * 0.06 * m;
-    g.scale.setScalar((narrow ? 0.86 : 1) * (1 - c * 0.28));
+    g.position.y = drop + Math.sin(t * 0.6 * m + index * 2) * 0.06 * m;
+    g.scale.setScalar(fs * (narrow ? 0.86 : 1) * (1 - c * 0.28));
     if (rimMat.current) rimMat.current.emissiveIntensity = 0.3 + weight.current * 2.2;
   });
 
@@ -229,11 +274,11 @@ function Slot({ index, rig, shared, low, fade, onSelect, children }: { index: nu
       >
         {children({ weight, hovered, live, low, motion: rig.current.reduced ? 0.15 : 1 })}
         {/* Exhibition pedestal with an accent light seam */}
-        <mesh position={[0, -1.42, 0]}>
+        <mesh position={[0, -1.42, 0]} userData={{ pedestal: true }}>
           <cylinderGeometry args={[2.7, 2.85, 0.16, low ? 40 : 64]} />
           <meshStandardMaterial color="#0e0e12" metalness={0.85} roughness={0.32} />
         </mesh>
-        <mesh position={[0, -1.335, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh position={[0, -1.335, 0]} rotation={[Math.PI / 2, 0, 0]} userData={{ pedestal: true }}>
           <torusGeometry args={[2.7, 0.012, 4, low ? 64 : 96]} />
           <meshStandardMaterial ref={rimMat} color="#000" emissive={accent} emissiveIntensity={1} toneMapped={false} />
         </mesh>
@@ -301,6 +346,68 @@ function FrameDriver({ rig, shared, active, onStats, onReady }: { rig: Props["ri
   return null;
 }
 
+/** Debug only (?debug3d): screen-space bounds of a sculpture, in CSS pixels, from its actual vertices. */
+function DebugBounds({ shared }: { shared: Shared }) {
+  const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  useEffect(() => {
+    if (!DEBUG) return;
+    const v = new THREE.Vector3();
+    const im = new THREE.Matrix4();
+    (window as unknown as { __praxis3d?: unknown }).__praxis3d = {
+      bounds(i: number) {
+        const g = shared.slots[i];
+        if (!g) return null;
+        g.updateWorldMatrix(true, true);
+        const piece = { top: Infinity, bottom: -Infinity, left: Infinity, right: -Infinity };
+        const pedestal = { ...piece };
+        let r = piece;
+        const add = (m: THREE.Matrix4, pos: THREE.BufferAttribute) => {
+          for (let k = 0; k < pos.count; k++) {
+            v.fromBufferAttribute(pos, k).applyMatrix4(m).project(camera);
+            const x = ((v.x + 1) / 2) * size.width, y = ((1 - v.y) / 2) * size.height;
+            if (y < r.top) r.top = y; if (y > r.bottom) r.bottom = y;
+            if (x < r.left) r.left = x; if (x > r.right) r.right = x;
+          }
+        };
+        g.traverseVisible((o) => {
+          const mesh = o as THREE.Mesh;
+          const pos = mesh.geometry?.getAttribute?.("position") as THREE.BufferAttribute | undefined;
+          if (!pos) return;
+          r = o.userData.pedestal ? pedestal : piece;
+          const inst = o as THREE.InstancedMesh;
+          if (inst.isInstancedMesh) {
+            for (let n = 0; n < inst.count; n++) { inst.getMatrixAt(n, im); add(im.premultiply(inst.matrixWorld), pos); }
+          } else add(mesh.matrixWorld, pos);
+        });
+        return { piece, pedestal };
+      },
+      /** Projected screen points of every vertex, for exact overlap checks. */
+      points(i: number) {
+        const g = shared.slots[i];
+        if (!g) return [];
+        g.updateWorldMatrix(true, true);
+        const out: number[] = [];
+        const add = (m: THREE.Matrix4, pos: THREE.BufferAttribute) => {
+          for (let k = 0; k < pos.count; k++) {
+            v.fromBufferAttribute(pos, k).applyMatrix4(m).project(camera);
+            out.push(((v.x + 1) / 2) * size.width, ((1 - v.y) / 2) * size.height);
+          }
+        };
+        g.traverseVisible((o) => {
+          const pos = (o as THREE.Mesh).geometry?.getAttribute?.("position") as THREE.BufferAttribute | undefined;
+          if (!pos) return;
+          const inst = o as THREE.InstancedMesh;
+          if (inst.isInstancedMesh) for (let n = 0; n < inst.count; n++) { inst.getMatrixAt(n, im); add(im.premultiply(inst.matrixWorld), pos); }
+          else add(o.matrixWorld, pos);
+        });
+        return out;
+      },
+    };
+  }, [camera, size, shared]);
+  return null;
+}
+
 const LEVELS = { high: [0.75, 1, 1.25, 1.5], low: [0.6, 0.75, 1] } as const;
 
 export default function HomeCanvas({ rig, onSelect, active, tier: initialTier, locked = false, onReady }: Props) {
@@ -315,7 +422,7 @@ export default function HomeCanvas({ rig, onSelect, active, tier: initialTier, l
   const lvl = Math.min(level, maxLevel);
   const dpr = levels[lvl];
   const changes = useRef(0);
-  const shared = useRef<Shared>({ weights: [1, 0, 0], slots: [null, null, null], hovered: false, busy: false }).current;
+  const shared = useRef<Shared>({ weights: [1, 0, 0], slots: [null, null, null], hovered: false, busy: false, fit: { s: 1, drop: 0 } }).current;
   const fade = useRadialFade();
   // MSAA is worth it on 1x screens; on high-density screens the extra pixels already smooth edges.
   const [antialias] = useState(() => initialTier === "high" && deviceMax < 1.5);
@@ -347,6 +454,7 @@ export default function HomeCanvas({ rig, onSelect, active, tier: initialTier, l
       aria-hidden
     >
       <FrameDriver rig={rig} shared={shared} active={active} onStats={onStats} onReady={onReady} />
+      {DEBUG && <DebugBounds shared={shared} />}
       <fog attach="fog" args={["#07070a", 11, 24]} />
       <ambientLight intensity={0.16} />
       <CameraRig rig={rig} shared={shared} low={low} />
