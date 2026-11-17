@@ -1,20 +1,58 @@
 "use client";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 /**
  * Three procedural centerpieces. Each receives `weight` — a ref (0..1) for how
  * "focused" it is — so it can brighten and animate more while active.
+ *
+ * Performance notes: parts that never move relative to each other are merged into a
+ * single geometry (one draw call), repeated moving parts use instancing, and nothing
+ * is allocated inside `useFrame`. The faculty point lights live in HomeCanvas (pooled),
+ * so each piece adds no lights of its own.
  */
 export interface PieceProps {
   weight: React.MutableRefObject<number>;
   hovered: React.MutableRefObject<boolean>;
   /** 1 = full motion, ~0.15 when the user prefers reduced motion. */
   motion: number;
+  /** False while the piece is off-screen: skip all per-frame work. */
+  live: React.MutableRefObject<boolean>;
+  /** Low-power tier: fewer decorative objects and segments. */
+  low: boolean;
 }
 
 const damp = THREE.MathUtils.damp;
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+const _v = new THREE.Vector3();
+const _s = new THREE.Vector3();
+
+type V3 = readonly [number, number, number];
+
+/** Bake a transform into a geometry and normalise it so it can be merged with any other. */
+function place(g: THREE.BufferGeometry, pos: V3 = [0, 0, 0], rot: V3 = [0, 0, 0], scale: V3 = [1, 1, 1]) {
+  _m.compose(_v.set(...pos), _q.setFromEuler(_e.set(...rot)), _s.set(...scale));
+  const out = g.index ? g.toNonIndexed() : g;
+  if (out !== g) g.dispose();
+  out.applyMatrix4(_m);
+  if (!out.getAttribute("uv")) out.setAttribute("uv", new THREE.Float32BufferAttribute(new Float32Array(out.getAttribute("position").count * 2), 2));
+  return out;
+}
+function merge(parts: THREE.BufferGeometry[]) {
+  const g = mergeGeometries(parts)!;
+  parts.forEach((p) => p.dispose());
+  return g;
+}
+/** Dispose geometries created in useMemo when the piece unmounts or rebuilds. */
+function useDispose(...items: (THREE.BufferGeometry | THREE.Material | undefined)[]) {
+  useEffect(() => () => items.forEach((i) => i?.dispose()), items); // eslint-disable-line react-hooks/exhaustive-deps
+}
+/** Round-segment count, reduced on the low tier. */
+const seg = (n: number, low: boolean) => Math.max(6, Math.round(low ? n * 0.6 : n));
 
 /* ------------------------------------------------------------------ */
 /* Engineering — gear train, spinning turbine, blue light rings        */
@@ -55,208 +93,266 @@ function gearGeometry(radius: number, teeth: number, depth: number, hole = 0.18)
   return g;
 }
 
-export function EngineeringPiece({ weight, hovered, motion }: PieceProps) {
-  const gears = useMemo(
-    () => [
-      { r: 1.15, t: 24, pos: [-0.55, 0.35, 0] as const, dir: 1 },
-      { r: 0.62, t: 13, pos: [1.12, 0.9, 0.02] as const, dir: -1 },
-      { r: 0.82, t: 17, pos: [0.98, -0.62, -0.02] as const, dir: -1 },
-    ].map((g) => ({ ...g, geo: gearGeometry(g.r, g.t, 0.22) })),
-    [],
-  );
+const GEARS = [
+  { r: 1.15, t: 24, pos: [-0.55, 0.35, 0] as V3, dir: 1 },
+  { r: 0.62, t: 13, pos: [1.12, 0.9, 0.02] as V3, dir: -1 },
+  { r: 0.82, t: 17, pos: [0.98, -0.62, -0.02] as V3, dir: -1 },
+];
+const NUTS = Array.from({ length: 7 }, (_, i) => {
+  const a = (i / 7) * Math.PI * 2;
+  const r = 2.15 + (i % 2) * 0.35;
+  return { i, hex: i % 3 === 0, pos: [Math.cos(a) * r, Math.sin(a) * r * 0.62, Math.sin(a * 2) * 0.5] as V3, rx: 0, ry: 0 };
+});
+
+export function EngineeringPiece({ weight, hovered, motion, live, low }: PieceProps) {
+  const geo = useMemo(() => {
+    const gears = GEARS.map((g) => gearGeometry(g.r, g.t, 0.22));
+    const axles = merge(GEARS.map((g) => place(new THREE.CylinderGeometry(g.r * 0.17, g.r * 0.17, 0.5, seg(16, low)), [g.pos[0], g.pos[1], 0], [Math.PI / 2, 0, 0])));
+    const hub = new THREE.CylinderGeometry(0.32, 0.4, 0.5, seg(24, low));
+    hub.rotateX(Math.PI / 2);
+    const blades = merge(Array.from({ length: 14 }, (_, i) => place(new THREE.BoxGeometry(0.07, 1.9, 0.28), [0, 0, 0], [0, 0.5, (i / 14) * Math.PI * 2])));
+    const bearing = new THREE.TorusGeometry(1.08, 0.07, seg(12, low), seg(72, low));
+    // The inner ring brightens with focus; the outer two keep a steady glow (two draws, not three).
+    const ringGeo = (i: number) => place(new THREE.TorusGeometry([2.1, 2.45, 2.8][i], 0.012, 4, seg(96, low)), [0, 0, 0], [Math.PI / 2 + i * 0.5, i * 0.7, 0]);
+    const rings = ringGeo(0);
+    const ringsOuter = merge([ringGeo(1), ringGeo(2)]);
+    const hex = new THREE.CylinderGeometry(0.13, 0.13, 0.09, 6);
+    const bar = new THREE.BoxGeometry(0.07, 0.36, 0.07);
+    return { gears, axles, hub, blades, bearing, rings, ringsOuter, hex, bar };
+  }, [low]);
+  useDispose(...geo.gears, geo.axles, geo.hub, geo.blades, geo.bearing, geo.rings, geo.ringsOuter, geo.hex, geo.bar);
+
   const gearRefs = useRef<(THREE.Mesh | null)[]>([]);
   const turbine = useRef<THREE.Group>(null);
   const rings = useRef<THREE.Group>(null);
   const ringMat = useRef<THREE.MeshStandardMaterial>(null);
-  const light = useRef<THREE.PointLight>(null);
   const speed = useRef(0.3);
   const nuts = useRef<THREE.Group>(null);
+  const hexes = useRef<THREE.InstancedMesh>(null);
+  const bars = useRef<THREE.InstancedMesh>(null);
+  const state = useRef(NUTS.map((n) => ({ ...n })));
 
   useFrame((_, dt) => {
+    if (!live.current) return;
     const w = weight.current;
+    const m = motion * (0.3 + 0.7 * w); // neighbours barely move
     speed.current = damp(speed.current, (0.25 + w * 0.9 + (hovered.current ? 0.8 : 0)) * motion, 3, dt);
     const base = speed.current * dt;
-    gears.forEach((g, i) => {
-      const m = gearRefs.current[i];
+    for (let i = 0; i < GEARS.length; i++) {
+      const g = gearRefs.current[i];
       // Meshing ratio: angular speed inversely proportional to tooth count.
-      if (m) m.rotation.z += (g.dir * base * 24) / g.t;
-    });
+      if (g) g.rotation.z += (GEARS[i].dir * base * 24) / GEARS[i].t;
+    }
     if (turbine.current) turbine.current.rotation.z -= base * 6;
     if (rings.current) {
-      rings.current.rotation.x += dt * 0.15 * motion;
-      rings.current.rotation.y += dt * 0.22 * motion;
+      rings.current.rotation.x += dt * 0.15 * m;
+      rings.current.rotation.y += dt * 0.22 * m;
     }
-    if (nuts.current) {
-      nuts.current.rotation.z += dt * 0.35 * motion;
-      nuts.current.children.forEach((c, i) => { c.rotation.x += dt * (0.6 + i * 0.1) * motion; c.rotation.y += dt * 0.4 * motion; });
+    if (nuts.current && hexes.current && bars.current) {
+      nuts.current.rotation.z += dt * 0.35 * m;
+      let h = 0, b = 0;
+      for (const n of state.current) {
+        n.rx += dt * (0.6 + n.i * 0.1) * m;
+        n.ry += dt * 0.4 * m;
+        _m.compose(_v.set(...n.pos), _q.setFromEuler(_e.set(n.rx, n.ry, 0)), _s.set(1, 1, 1));
+        if (n.hex) hexes.current.setMatrixAt(h++, _m);
+        else bars.current.setMatrixAt(b++, _m);
+      }
+      hexes.current.instanceMatrix.needsUpdate = true;
+      bars.current.instanceMatrix.needsUpdate = true;
     }
     if (ringMat.current) ringMat.current.emissiveIntensity = damp(ringMat.current.emissiveIntensity, 0.6 + w * 2.6, 4, dt);
-    if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 14, 4, dt);
   });
 
+  const nHex = NUTS.filter((n) => n.hex).length;
   return (
     <group>
-      <pointLight ref={light} color="#5aa9ff" position={[0, 0.4, 2.2]} distance={9} decay={2} />
-      {gears.map((g, i) => (
-        <mesh key={i} ref={(m) => { gearRefs.current[i] = m; }} geometry={g.geo} position={g.pos} rotation={[0, 0, i * 0.13]} castShadow>
+      {GEARS.map((g, i) => (
+        <mesh key={i} ref={(m) => { gearRefs.current[i] = m; }} geometry={geo.gears[i]} position={g.pos} rotation={[0, 0, i * 0.13]}>
           <meshStandardMaterial color={i === 0 ? "#9aa3ad" : "#6b737c"} metalness={0.95} roughness={0.28} />
         </mesh>
       ))}
-      {/* Axles */}
-      {gears.map((g, i) => (
-        <mesh key={`a${i}`} position={[g.pos[0], g.pos[1], 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[g.r * 0.17, g.r * 0.17, 0.5, 24]} />
-          <meshStandardMaterial color="#22262b" metalness={1} roughness={0.35} />
-        </mesh>
-      ))}
-      {/* Turbine behind the gear train */}
+      {/* Axles (merged) */}
+      <mesh geometry={geo.axles}>
+        <meshStandardMaterial color="#22262b" metalness={1} roughness={0.35} />
+      </mesh>
+      {/* Turbine behind the gear train: hub + 14 blades merged into one mesh */}
       <group ref={turbine} position={[-0.55, 0.35, -0.65]}>
-        <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.32, 0.4, 0.5, 32]} />
+        <mesh geometry={geo.hub}>
           <meshStandardMaterial color="#2c3138" metalness={1} roughness={0.25} />
         </mesh>
-        {Array.from({ length: 14 }, (_, i) => (
-          <mesh key={i} rotation={[0, 0.5, (i / 14) * Math.PI * 2]} position={[0, 0, 0]}>
-            <boxGeometry args={[0.07, 1.9, 0.28]} />
-            <meshStandardMaterial color="#8892a0" metalness={0.9} roughness={0.3} />
-          </mesh>
-        ))}
+        <mesh geometry={geo.blades}>
+          <meshStandardMaterial color="#8892a0" metalness={0.9} roughness={0.3} />
+        </mesh>
       </group>
       {/* Bearing ring around the turbine */}
-      <mesh position={[-0.55, 0.35, -0.65]}>
-        <torusGeometry args={[1.08, 0.07, 16, 96]} />
+      <mesh geometry={geo.bearing} position={[-0.55, 0.35, -0.65]}>
         <meshStandardMaterial color="#3a414a" metalness={1} roughness={0.2} />
       </mesh>
-      {/* Orbiting precision components */}
-      <group ref={nuts} position={[0.15, 0.2, 0]}>
-        {Array.from({ length: 7 }, (_, i) => {
-          const a = (i / 7) * Math.PI * 2;
-          const r = 2.15 + (i % 2) * 0.35;
-          return (
-            <mesh key={i} position={[Math.cos(a) * r, Math.sin(a) * r * 0.62, Math.sin(a * 2) * 0.5]}>
-              {i % 3 === 0 ? <cylinderGeometry args={[0.13, 0.13, 0.09, 6]} /> : <boxGeometry args={[0.07, 0.36, 0.07]} />}
-              <meshStandardMaterial color="#9aa3ad" metalness={1} roughness={0.25} />
-            </mesh>
-          );
-        })}
-      </group>
-      {/* Blue light rings */}
+      {/* Orbiting precision components (instanced; skipped on the low tier) */}
+      {!low && (
+        <group ref={nuts} position={[0.15, 0.2, 0]}>
+          <instancedMesh ref={hexes} args={[geo.hex, undefined, nHex]} frustumCulled={false}>
+            <meshStandardMaterial color="#9aa3ad" metalness={1} roughness={0.25} />
+          </instancedMesh>
+          <instancedMesh ref={bars} args={[geo.bar, undefined, NUTS.length - nHex]} frustumCulled={false}>
+            <meshStandardMaterial color="#9aa3ad" metalness={1} roughness={0.25} />
+          </instancedMesh>
+        </group>
+      )}
+      {/* Blue light rings (merged) */}
       <group ref={rings} position={[0.15, 0.2, -0.2]}>
-        {[2.1, 2.45, 2.8].map((r, i) => (
-          <mesh key={i} rotation={[Math.PI / 2 + i * 0.5, i * 0.7, 0]}>
-            <torusGeometry args={[r, 0.012, 8, 160]} />
-            <meshStandardMaterial ref={i === 0 ? ringMat : undefined} color="#0c1f36" emissive="#5aa9ff" emissiveIntensity={1} toneMapped={false} />
-          </mesh>
-        ))}
+        <mesh geometry={geo.rings}>
+          <meshStandardMaterial ref={ringMat} color="#0c1f36" emissive="#5aa9ff" emissiveIntensity={1} toneMapped={false} />
+        </mesh>
+        <mesh geometry={geo.ringsOuter}>
+          <meshStandardMaterial color="#0c1f36" emissive="#5aa9ff" emissiveIntensity={1} toneMapped={false} />
+        </mesh>
       </group>
     </group>
   );
 }
 
-const FLOATERS: { p: [number, number, number]; s: number; k: number }[] = [
+/* ------------------------------------------------------------------ */
+/* Finance — metal columns, gold price curve, rings, coin stack        */
+/* ------------------------------------------------------------------ */
+
+const FLOATERS: { p: V3; s: number; k: 0 | 1 | 2 }[] = [
   { p: [-2.4, 1.9, -0.6], s: 0.26, k: 0 },
   { p: [-1.1, 2.6, -0.9], s: 0.18, k: 1 },
   { p: [1.3, 2.9, -0.5], s: 0.22, k: 2 },
   { p: [2.5, 1.6, -0.8], s: 0.3, k: 1 },
   { p: [0.2, 3.3, -1.2], s: 0.16, k: 0 },
 ];
+const HEIGHTS = [0.9, 1.4, 1.1, 1.9, 1.6, 2.5, 2.2, 3.0];
+const polyFor = (k: 0 | 1 | 2) => (k === 0 ? new THREE.OctahedronGeometry(1) : k === 1 ? new THREE.IcosahedronGeometry(1, 0) : new THREE.TetrahedronGeometry(1));
 
-/* ------------------------------------------------------------------ */
-/* Finance — metal columns, gold price curve, rings, coin stack        */
-/* ------------------------------------------------------------------ */
+export function FinancePiece({ weight, hovered, motion, live, low }: PieceProps) {
+  const geo = useMemo(() => {
+    const pts = HEIGHTS.map((h, i) => new THREE.Vector3(-1.75 + i * 0.5, h - 1.05 + 0.35, 0.45));
+    const curve = new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.4);
+    const tube = new THREE.TubeGeometry(curve, low ? 80 : 120, 0.035, low ? 6 : 8, false);
+    const column = new THREE.CylinderGeometry(0.16, 0.16, 1, seg(24, low));
+    const plinth = new THREE.BoxGeometry(4.4, 0.14, 1.3);
+    const rings = merge([2.3, 2.7].map((r, i) => place(new THREE.TorusGeometry(r, 0.02, seg(8, low), seg(110, low)), [0, 0, 0], [0, 0, i * 0.4])));
+    const coins = merge(Array.from({ length: 9 }, (_, i) => place(new THREE.CylinderGeometry(0.3, 0.3, 0.07, seg(32, low)), [Math.sin(i * 1.7) * 0.03, 0.05 + i * 0.085, Math.cos(i * 1.3) * 0.03])));
+    const polys = ([0, 1, 2] as const).map(polyFor);
+    // All floater outlines in one line buffer; vertices are rewritten each frame as the floaters move.
+    const edgeSrc = FLOATERS.map((f) => {
+      const e = new THREE.EdgesGeometry(polyFor(f.k).scale(f.s * 1.01, f.s * 1.01, f.s * 1.01));
+      const arr = (e.getAttribute("position").array as Float32Array).slice();
+      e.dispose();
+      return arr;
+    });
+    const edges = new THREE.BufferGeometry();
+    edges.setAttribute("position", new THREE.BufferAttribute(new Float32Array(edgeSrc.reduce((n, a) => n + a.length, 0)), 3).setUsage(THREE.DynamicDrawUsage));
+    return { tube, column, plinth, rings, coins, polys, edges, edgeSrc };
+  }, [low]);
+  useDispose(geo.tube, geo.column, geo.plinth, geo.rings, geo.coins, geo.edges, ...geo.polys);
 
-export function FinancePiece({ weight, hovered, motion }: PieceProps) {
-  const heights = [0.9, 1.4, 1.1, 1.9, 1.6, 2.5, 2.2, 3.0];
-  const curve = useMemo(() => {
-    const pts = heights.map((h, i) => new THREE.Vector3(-1.75 + i * 0.5, h - 1.05 + 0.35, 0.45));
-    return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.4);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const tube = useMemo(() => new THREE.TubeGeometry(curve, 160, 0.035, 10, false), [curve]);
-  const tubeRef = useRef<THREE.Mesh>(null);
   const tubeMat = useRef<THREE.MeshStandardMaterial>(null);
   const rings = useRef<THREE.Group>(null);
   const coins = useRef<THREE.Group>(null);
-  const cols = useRef<(THREE.Mesh | null)[]>([]);
-  const light = useRef<THREE.PointLight>(null);
+  const cols = useRef<THREE.InstancedMesh>(null);
+  const polys = useRef<(THREE.InstancedMesh | null)[]>([]);
+  const lines = useRef<THREE.LineSegments>(null);
   const draw = useRef(0);
-  const shapes = useRef<THREE.Group>(null);
+  const clock = useRef(0);
+  const colY = useRef(HEIGHTS.map(() => 0.5));
+  const spin = useRef(FLOATERS.map(() => ({ x: 0, y: 0 })));
 
-  useFrame((state, dt) => {
+  // Per-column colours (alternating steel) for the instanced columns.
+  useEffect(() => {
+    const c = cols.current;
+    if (!c) return;
+    const a = new THREE.Color("#3a3d44"), b = new THREE.Color("#5b6069");
+    HEIGHTS.forEach((_, i) => c.setColorAt(i, i % 2 ? a : b));
+    c.instanceColor!.needsUpdate = true;
+  }, [geo]);
+
+  useFrame((_, dt) => {
+    if (!live.current) return;
     const w = weight.current;
-    const t = state.clock.elapsedTime;
+    const m = motion * (0.3 + 0.7 * w);
+    const t = (clock.current += dt * m);
     // Price curve "draws" itself in as Finance becomes active.
     draw.current = damp(draw.current, 0.25 + w * 0.75, 2.2, dt);
-    tube.setDrawRange(0, Math.floor(tube.index!.count * draw.current));
+    geo.tube.setDrawRange(0, Math.floor(geo.tube.index!.count * draw.current));
     if (tubeMat.current) tubeMat.current.emissiveIntensity = damp(tubeMat.current.emissiveIntensity, 0.5 + w * 2.4 + (hovered.current ? 1 : 0), 4, dt);
-    cols.current.forEach((c, i) => {
-      if (!c) return;
-      const target = heights[i] * (0.55 + 0.45 * w) + Math.sin(t * 0.8 + i) * 0.04 * w;
-      c.scale.y = damp(c.scale.y, target, 3, dt);
-      c.position.y = -1.05 + c.scale.y / 2;
-    });
+    const c = cols.current;
+    if (c) {
+      for (let i = 0; i < HEIGHTS.length; i++) {
+        const target = HEIGHTS[i] * (0.55 + 0.45 * w) + Math.sin(t * 0.8 + i) * 0.04 * w;
+        const y = (colY.current[i] = damp(colY.current[i], target, 3, dt));
+        _m.compose(_v.set(-1.75 + i * 0.5, -1.05 + y / 2, 0), _q.identity(), _s.set(1, y, 1));
+        c.setMatrixAt(i, _m);
+      }
+      c.instanceMatrix.needsUpdate = true;
+    }
     if (rings.current) {
-      rings.current.rotation.y += dt * (0.2 + w * 0.4) * motion;
+      rings.current.rotation.y += dt * (0.2 + w * 0.4) * m;
       rings.current.rotation.x = Math.sin(t * 0.3) * 0.25 + 1.2;
     }
     if (coins.current) coins.current.rotation.y += dt * (0.3 + (hovered.current ? 1.2 : 0)) * motion;
-    if (shapes.current) {
-      shapes.current.children.forEach((c, i) => {
-        c.position.y = FLOATERS[i].p[1] + Math.sin(t * 0.7 * motion + i * 1.3) * 0.12;
-        c.rotation.x += dt * 0.3 * motion;
-        c.rotation.y += dt * (0.25 + i * 0.05) * motion;
+    if (!low && lines.current) {
+      const out = geo.edges.getAttribute("position") as THREE.BufferAttribute;
+      const arr = out.array as Float32Array;
+      const counts = [0, 0, 0];
+      let o = 0;
+      FLOATERS.forEach((f, i) => {
+        const s = spin.current[i];
+        s.x += dt * 0.3 * m;
+        s.y += dt * (0.25 + i * 0.05) * m;
+        _m.compose(_v.set(f.p[0], f.p[1] + Math.sin(t * 0.7 + i * 1.3) * 0.12, f.p[2]), _q.setFromEuler(_e.set(s.x, s.y, 0)), _s.set(f.s, f.s, f.s));
+        polys.current[f.k]?.setMatrixAt(counts[f.k]++, _m);
+        // Outline: same transform minus the scale (outline vertices are pre-scaled).
+        _m.compose(_v, _q, _s.set(1, 1, 1));
+        const src = geo.edgeSrc[i];
+        for (let j = 0; j < src.length; j += 3) {
+          _v.set(src[j], src[j + 1], src[j + 2]).applyMatrix4(_m);
+          arr[o++] = _v.x; arr[o++] = _v.y; arr[o++] = _v.z;
+        }
       });
+      out.needsUpdate = true;
+      polys.current.forEach((p) => { if (p) p.instanceMatrix.needsUpdate = true; });
     }
-    if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 12, 4, dt);
   });
 
   return (
     <group>
-      <pointLight ref={light} color="#ffd27a" position={[0.4, 1.2, 2.2]} distance={9} decay={2} />
-      {heights.map((_, i) => (
-        <mesh key={i} ref={(m) => { cols.current[i] = m; }} position={[-1.75 + i * 0.5, 0, 0]} scale={[1, 0.5, 1]}>
-          <cylinderGeometry args={[0.16, 0.16, 1, 32]} />
-          <meshStandardMaterial color={i % 2 ? "#3a3d44" : "#5b6069"} metalness={1} roughness={0.22} />
-        </mesh>
-      ))}
+      <instancedMesh ref={cols} args={[geo.column, undefined, HEIGHTS.length]} frustumCulled={false}>
+        <meshStandardMaterial color="#ffffff" metalness={1} roughness={0.22} />
+      </instancedMesh>
       {/* Base plinth */}
-      <mesh position={[0, -1.12, 0]}>
-        <boxGeometry args={[4.4, 0.14, 1.3]} />
+      <mesh geometry={geo.plinth} position={[0, -1.12, 0]}>
         <meshStandardMaterial color="#141418" metalness={0.6} roughness={0.5} />
       </mesh>
-      <mesh ref={tubeRef} geometry={tube}>
+      <mesh geometry={geo.tube}>
         <meshStandardMaterial ref={tubeMat} color="#3d2c08" emissive="#d8b35a" emissiveIntensity={1} metalness={1} roughness={0.2} toneMapped={false} />
       </mesh>
       <group ref={rings} position={[0, 0.5, -0.4]}>
-        {[2.3, 2.7].map((r, i) => (
-          <mesh key={i} rotation={[0, 0, i * 0.4]}>
-            <torusGeometry args={[r, 0.02, 12, 180]} />
-            <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.18} />
-          </mesh>
-        ))}
+        <mesh geometry={geo.rings}>
+          <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.18} />
+        </mesh>
       </group>
-      {/* Floating geometric data sculptures */}
-      <group ref={shapes}>
-        {FLOATERS.map((f, i) => (
-          <group key={i} position={f.p}>
-            <mesh>
-              {f.k === 0 ? <octahedronGeometry args={[f.s]} /> : f.k === 1 ? <icosahedronGeometry args={[f.s, 0]} /> : <tetrahedronGeometry args={[f.s]} />}
+      {/* Floating geometric data sculptures: one instanced mesh per shape + one outline buffer */}
+      {!low && (
+        <>
+          {([0, 1, 2] as const).map((k) => (
+            <instancedMesh key={k} ref={(m) => { polys.current[k] = m; }} args={[geo.polys[k], undefined, FLOATERS.filter((f) => f.k === k).length]} frustumCulled={false}>
               <meshStandardMaterial color="#1b1a17" metalness={1} roughness={0.15} />
-            </mesh>
-            <lineSegments>
-              <edgesGeometry args={[f.k === 0 ? new THREE.OctahedronGeometry(f.s * 1.01) : f.k === 1 ? new THREE.IcosahedronGeometry(f.s * 1.01, 0) : new THREE.TetrahedronGeometry(f.s * 1.01)]} />
-              <lineBasicMaterial color="#d8b35a" toneMapped={false} />
-            </lineSegments>
-          </group>
-        ))}
-      </group>
-      {/* Coin stack */}
+            </instancedMesh>
+          ))}
+          <lineSegments ref={lines} geometry={geo.edges} frustumCulled={false}>
+            <lineBasicMaterial color="#d8b35a" toneMapped={false} />
+          </lineSegments>
+        </>
+      )}
+      {/* Coin stack (merged) */}
       <group ref={coins} position={[2.45, -1.05, 0.6]}>
-        {Array.from({ length: 9 }, (_, i) => (
-          <mesh key={i} position={[Math.sin(i * 1.7) * 0.03, 0.05 + i * 0.085, Math.cos(i * 1.3) * 0.03]}>
-            <cylinderGeometry args={[0.3, 0.3, 0.07, 48]} />
-            <meshStandardMaterial color="#d8b35a" metalness={1} roughness={0.25} />
-          </mesh>
-        ))}
+        <mesh geometry={geo.coins}>
+          <meshStandardMaterial color="#d8b35a" metalness={1} roughness={0.25} />
+        </mesh>
       </group>
     </group>
   );
@@ -266,117 +362,91 @@ export function FinancePiece({ weight, hovered, motion }: PieceProps) {
 /* Law — stone portico, burgundy light seams, scale of justice         */
 /* ------------------------------------------------------------------ */
 
-export function LawPiece({ weight, hovered, motion }: PieceProps) {
-  const pediment = useMemo(() => {
+const COLUMNS_X = [-1.6, -0.8, 0.8, 1.6];
+
+export function LawPiece({ weight, hovered, motion, live, low }: PieceProps) {
+  const geo = useMemo(() => {
+    // Every static stone block → one geometry.
     const s = new THREE.Shape();
     s.moveTo(-2.1, 0);
     s.lineTo(2.1, 0);
     s.lineTo(0, 0.72);
     s.closePath();
-    const g = new THREE.ExtrudeGeometry(s, { depth: 1.1, bevelEnabled: false });
-    g.translate(0, 0, -0.55);
-    return g;
-  }, []);
-  const seamMats = useRef<THREE.MeshStandardMaterial[]>([]);
+    const ped = new THREE.ExtrudeGeometry(s, { depth: 1.1, bevelEnabled: false });
+    ped.translate(0, 0, -0.55);
+    const stone = merge([
+      ...[0, 1, 2].map((i) => place(new THREE.BoxGeometry(4.6 - i * 0.3, 0.16, 1.7 - i * 0.24), [0, -1.0 + i * 0.16, 0.22 - i * 0.12])),
+      ...COLUMNS_X.flatMap((x) => [
+        place(new THREE.CylinderGeometry(0.17, 0.2, 1.9, seg(20, low)), [x, 0.42, 0]),
+        place(new THREE.BoxGeometry(0.5, 0.12, 0.5), [x, 1.42, 0]),
+        place(new THREE.BoxGeometry(0.48, 0.1, 0.48), [x, -0.56, 0]),
+      ]),
+      place(new THREE.BoxGeometry(4.3, 0.26, 1.15), [0, 1.55, 0]),
+      place(ped, [0, 1.68, 0]),
+    ]);
+    const seams = merge([
+      place(new THREE.BoxGeometry(4.6, 0.012, 0.012), [0, -0.915, 1.075]),
+      place(new THREE.BoxGeometry(4.3, 0.012, 0.012), [0, -0.755, 0.835]),
+      place(new THREE.BoxGeometry(4.0, 0.012, 0.012), [0, -0.595, 0.595]),
+      place(new THREE.BoxGeometry(4.3, 0.014, 0.014), [0, 1.415, 0.58]),
+      place(new THREE.BoxGeometry(4.3, 0.014, 0.014), [0, 1.685, 0.58]),
+    ]);
+    const stand = merge([
+      place(new THREE.CylinderGeometry(0.025, 0.035, 1.4, 12), [0, 0.7, 0]),
+      place(new THREE.CylinderGeometry(0.18, 0.22, 0.05, seg(24, low)), [0, 0.02, 0]),
+    ]);
+    const rod = new THREE.CylinderGeometry(0.018, 0.018, 1.0, 12);
+    rod.rotateZ(Math.PI / 2);
+    const strings = merge([-1, 1].map((sg) => place(new THREE.CylinderGeometry(0.004, 0.004, 0.46, 4), [sg * 0.08, -0.22, 0], [0, 0, sg * 0.35])));
+    const pan = new THREE.CylinderGeometry(0.2, 0.12, 0.05, seg(24, low));
+    pan.translate(0, -0.45, 0);
+    return { stone, seams, stand, rod, strings, pan };
+  }, [low]);
+  useDispose(geo.stone, geo.seams, geo.stand, geo.rod, geo.strings, geo.pan);
+
+  const seamMat = useRef<THREE.MeshStandardMaterial>(null);
   const beam = useRef<THREE.Group>(null);
   const panL = useRef<THREE.Group>(null);
   const panR = useRef<THREE.Group>(null);
-  const light = useRef<THREE.PointLight>(null);
   const tilt = useRef(0.18);
+  const clock = useRef(0);
 
-  const stone = { color: "#57534f", roughness: 0.72, metalness: 0.1 };
-  const seam = (key: string, pos: [number, number, number], size: [number, number, number]) => (
-    <mesh key={key} position={pos}>
-      <boxGeometry args={size} />
-      <meshStandardMaterial
-        ref={(m) => { if (m && !seamMats.current.includes(m)) seamMats.current.push(m); }}
-        color="#1a0508"
-        emissive="#c23a50"
-        emissiveIntensity={1}
-        toneMapped={false}
-      />
-    </mesh>
-  );
-
-  useFrame((state, dt) => {
+  useFrame((_, dt) => {
+    if (!live.current) return;
     const w = weight.current;
-    const t = state.clock.elapsedTime;
-    seamMats.current.forEach((m) => { m.emissiveIntensity = damp(m.emissiveIntensity, 0.4 + w * 2.8, 3, dt); });
+    const t = (clock.current += dt * motion * (0.3 + 0.7 * w));
+    if (seamMat.current) seamMat.current.emissiveIntensity = damp(seamMat.current.emissiveIntensity, 0.4 + w * 2.8, 3, dt);
     // Scale settles toward balance when focused; tips when hovered.
-    const target = hovered.current ? Math.sin(t * 2.2 * motion) * 0.22 : (1 - w) * 0.18 + Math.sin(t * 0.9 * motion) * 0.03;
+    const target = hovered.current ? Math.sin(t * 2.2) * 0.22 : (1 - w) * 0.18 + Math.sin(t * 0.9) * 0.03;
     tilt.current = damp(tilt.current, target, 2.5, dt);
     if (beam.current) beam.current.rotation.z = tilt.current;
     if (panL.current) panL.current.rotation.z = -tilt.current;
     if (panR.current) panR.current.rotation.z = -tilt.current;
-    if (light.current) light.current.intensity = damp(light.current.intensity, 2 + w * 13, 4, dt);
   });
 
-  const columnsX = [-1.6, -0.8, 0.8, 1.6];
   return (
     <group position={[0, -0.25, 0]}>
-      <pointLight ref={light} color="#ff5a6e" position={[0, 0.6, 2.4]} distance={9} decay={2} />
-      {/* Steps */}
-      {[0, 1, 2].map((i) => (
-        <mesh key={i} position={[0, -1.0 + i * 0.16, 0.22 - i * 0.12]}>
-          <boxGeometry args={[4.6 - i * 0.3, 0.16, 1.7 - i * 0.24]} />
-          <meshStandardMaterial {...stone} />
-        </mesh>
-      ))}
-      {seam("s0", [0, -0.915, 1.075], [4.6, 0.012, 0.012])}
-      {seam("s1", [0, -0.755, 0.835], [4.3, 0.012, 0.012])}
-      {seam("s2", [0, -0.595, 0.595], [4.0, 0.012, 0.012])}
-      {/* Columns */}
-      {columnsX.map((x) => (
-        <group key={x} position={[x, 0.42, 0]}>
-          <mesh>
-            <cylinderGeometry args={[0.17, 0.2, 1.9, 20]} />
-            <meshStandardMaterial {...stone} />
-          </mesh>
-          <mesh position={[0, 1.0, 0]}>
-            <boxGeometry args={[0.5, 0.12, 0.5]} />
-            <meshStandardMaterial {...stone} />
-          </mesh>
-          <mesh position={[0, -0.98, 0]}>
-            <boxGeometry args={[0.48, 0.1, 0.48]} />
-            <meshStandardMaterial {...stone} />
-          </mesh>
-        </group>
-      ))}
-      {/* Entablature + pediment */}
-      <mesh position={[0, 1.55, 0]}>
-        <boxGeometry args={[4.3, 0.26, 1.15]} />
-        <meshStandardMaterial {...stone} />
+      <mesh geometry={geo.stone}>
+        <meshStandardMaterial color="#57534f" roughness={0.72} metalness={0.1} />
       </mesh>
-      {seam("s3", [0, 1.415, 0.58], [4.3, 0.014, 0.014])}
-      {seam("s4", [0, 1.685, 0.58], [4.3, 0.014, 0.014])}
-      <mesh geometry={pediment} position={[0, 1.68, 0]}>
-        <meshStandardMaterial {...stone} />
+      <mesh geometry={geo.seams}>
+        <meshStandardMaterial ref={seamMat} color="#1a0508" emissive="#c23a50" emissiveIntensity={1} toneMapped={false} />
       </mesh>
       {/* Scale of justice, in the doorway */}
       <group position={[0, -0.43, 0.15]}>
-        <mesh position={[0, 0.7, 0]}>
-          <cylinderGeometry args={[0.025, 0.035, 1.4, 12]} />
-          <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.25} />
-        </mesh>
-        <mesh position={[0, 0.02, 0]}>
-          <cylinderGeometry args={[0.18, 0.22, 0.05, 32]} />
+        <mesh geometry={geo.stand}>
           <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.25} />
         </mesh>
         <group ref={beam} position={[0, 1.38, 0]}>
-          <mesh rotation={[0, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[0.018, 0.018, 1.0, 12]} />
+          <mesh geometry={geo.rod}>
             <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.25} />
           </mesh>
           {([[-0.5, panL], [0.5, panR]] as const).map(([x, ref]) => (
             <group key={x} ref={ref} position={[x, 0, 0]}>
-              {[-1, 1].map((s) => (
-                <mesh key={s} position={[s * 0.08, -0.22, 0]} rotation={[0, 0, s * 0.35]}>
-                  <cylinderGeometry args={[0.004, 0.004, 0.46, 4]} />
-                  <meshStandardMaterial color="#8c7a55" />
-                </mesh>
-              ))}
-              <mesh position={[0, -0.45, 0]}>
-                <cylinderGeometry args={[0.2, 0.12, 0.05, 32]} />
+              <mesh geometry={geo.strings}>
+                <meshStandardMaterial color="#8c7a55" />
+              </mesh>
+              <mesh geometry={geo.pan}>
                 <meshStandardMaterial color="#b8923e" metalness={1} roughness={0.25} />
               </mesh>
             </group>

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import gsap from "gsap";
 import type Lenis from "lenis";
 import { FACULTIES } from "@/lib/data";
-import type { Rig } from "@/components/three/HomeCanvas";
+import type { Rig, Tier } from "@/components/three/HomeCanvas";
 
 const HomeCanvas = dynamic(() => import("@/components/three/HomeCanvas"), { ssr: false });
 
@@ -20,12 +20,31 @@ const GLOW = ["rgba(90,169,255,0.17)", "rgba(216,179,90,0.15)", "rgba(176,56,74,
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const lenis = () => (window as unknown as { __lenis?: Lenis }).__lenis;
 
-function hasWebGL() {
+/**
+ * WebGL support + quality tier in one probe. Low tier: phones/small touch devices, few CPU cores or
+ * little memory, software renderers and older Intel HD/UHD integrated graphics.
+ * `?quality=high|low` overrides the automatic choice.
+ */
+function probeGraphics(): { webgl: boolean; tier: Tier; locked?: boolean } {
   try {
     const c = document.createElement("canvas");
-    return !!(window.WebGLRenderingContext && (c.getContext("webgl2") || c.getContext("webgl")));
+    const gl = (window.WebGLRenderingContext && (c.getContext("webgl2") || c.getContext("webgl"))) as WebGLRenderingContext | null;
+    if (!gl) return { webgl: false, tier: "low" };
+    const forced = new URLSearchParams(location.search).get("quality");
+    let renderer = "";
+    try {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
+    } catch { /* ignore */ }
+    gl.getExtension("WEBGL_lose_context")?.loseContext(); // free the probe context right away
+    if (forced === "high" || forced === "low") return { webgl: true, tier: forced, locked: true };
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    const smallTouch = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 820;
+    const weakCpu = (nav.hardwareConcurrency || 8) <= 4 || (nav.deviceMemory || 8) <= 4;
+    const weakGpu = /swiftshader|llvmpipe|software|basic render|mali-[gt]?[1-7]\d\b|adreno \(tm\) [1-5]\d\d|intel.*(hd|uhd) graphics/i.test(renderer);
+    return { webgl: true, tier: smallTouch || weakCpu || weakGpu ? "low" : "high" };
   } catch {
-    return false;
+    return { webgl: false, tier: "low" };
   }
 }
 
@@ -76,7 +95,11 @@ export function HomeExperience() {
   const tween = useRef<gsap.core.Tween | null>(null);
   const entering = useRef(false);
   const [webgl, setWebgl] = useState<boolean | null>(null);
+  const [tier, setTier] = useState<Tier>("high");
+  const [locked, setLocked] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
   const [visible, setVisible] = useState(true);
+  const [tabVisible, setTabVisible] = useState(true);
 
   // Restore state when returning (back button) and read motion preference.
   useLayoutEffect(() => {
@@ -87,8 +110,10 @@ export function HomeExperience() {
     rig.current.enter = 0;
     indexRef.current = shownRef.current = saved;
     setShown(saved);
-    if (atmo.current) atmo.current.style.setProperty("--glow", GLOW[saved]);
-    setWebgl(hasWebGL());
+    const g = probeGraphics();
+    setTier(g.tier);
+    setLocked(!!g.locked);
+    setWebgl(g.webgl);
     const onShow = (e: PageTransitionEvent) => {
       if (!e.persisted) return;
       entering.current = false;
@@ -107,20 +132,23 @@ export function HomeExperience() {
     return () => io.disconnect();
   }, []);
 
-  // Keep labels, title, button and atmosphere in sync with whatever is nearest the camera (live during drags).
+  // Pause the 3D scene while the tab is hidden.
   useEffect(() => {
-    let raf = 0;
-    const loop = () => {
-      const n = clamp(Math.round(rig.current.progress), 0, LAST);
-      if (n !== shownRef.current) {
-        dirRef.current = n > shownRef.current ? 1 : -1;
-        shownRef.current = n;
-        setShown(n);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    const onVis = () => setTabVisible(!document.hidden);
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  // Keep labels, title, button and atmosphere in sync with whatever is nearest the camera (live during drags).
+  // Called only when progress actually changes (tween updates, drag moves) instead of polling every frame.
+  const syncShown = useCallback(() => {
+    const n = clamp(Math.round(rig.current.progress), 0, LAST);
+    if (n !== shownRef.current) {
+      dirRef.current = n > shownRef.current ? 1 : -1;
+      shownRef.current = n;
+      setShown(n);
+    }
   }, []);
 
   const goTo = useCallback((target: number, fast = false) => {
@@ -135,8 +163,9 @@ export function HomeExperience() {
       progress: i,
       duration: reduced ? 0.25 : fast ? 0.7 + distance * 0.3 : 1.25 + distance * 0.35,
       ease: reduced ? "power1.out" : fast ? "power3.out" : "expo.inOut",
+      onUpdate: syncShown,
     });
-  }, []);
+  }, [syncShown]);
 
   const enter = useCallback(
     (i: number) => {
@@ -149,12 +178,12 @@ export function HomeExperience() {
       tween.current?.kill();
       const reduced = rig.current.reduced;
       const tl = gsap.timeline({ onComplete: () => router.push(href) });
-      tl.to(rig.current, { progress: i, duration: 0.3 }, 0);
+      tl.to(rig.current, { progress: i, duration: 0.3, onUpdate: syncShown }, 0);
       tl.to([titleRef.current, ui.current], { opacity: 0, scale: 1.04, duration: 0.5, ease: "power2.in" }, 0);
       if (!reduced) tl.to(rig.current, { enter: 1, duration: 1.2, ease: "power3.in" }, 0);
       tl.to(veil.current, { opacity: 1, duration: reduced ? 0.3 : 0.45, ease: "power1.in" }, reduced ? 0.1 : 0.85);
     },
-    [goTo, router],
+    [goTo, router, syncShown],
   );
 
   // ---------- wheel / trackpad: continuous follow, then settle ----------
@@ -210,14 +239,14 @@ export function HomeExperience() {
       const hi = Math.min(LAST + 0.12, gesture.start + 1);
       gesture.target = clamp(gesture.target + d / PX_PER_FACULTY, lo, hi);
       tween.current?.kill();
-      tween.current = gsap.to(rig.current, { progress: gesture.target, duration: rig.current.reduced ? 0.1 : 0.55, ease: "power2.out" });
+      tween.current = gsap.to(rig.current, { progress: gesture.target, duration: rig.current.reduced ? 0.1 : 0.55, ease: "power2.out", onUpdate: syncShown });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       clearTimeout(idle);
       el.removeEventListener("wheel", onWheel);
     };
-  }, [goTo]);
+  }, [goTo, syncShown]);
 
   // ---------- drag / touch swipe ----------
   useEffect(() => {
@@ -260,6 +289,7 @@ export function HomeExperience() {
       if (p < 0) p *= 0.3; // rubber band at the edges
       if (p > LAST) p = LAST + (p - LAST) * 0.3;
       rig.current.progress = p;
+      syncShown();
     };
     const up = (e: PointerEvent) => {
       if (id !== e.pointerId) return;
@@ -281,7 +311,7 @@ export function HomeExperience() {
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
     };
-  }, [goTo]);
+  }, [goTo, syncShown]);
 
   // ---------- keyboard ----------
   useEffect(() => {
@@ -299,7 +329,10 @@ export function HomeExperience() {
   // Title + atmosphere transition whenever the nearest faculty changes.
   useEffect(() => {
     const reduced = rig.current.reduced;
-    if (atmo.current) gsap.to(atmo.current, { "--glow": GLOW[shown], duration: reduced ? 0.2 : 1.4, ease: "power2.out" });
+    // Crossfade pre-rendered glow layers (opacity only — no full-screen repaint per frame).
+    atmo.current?.querySelectorAll<HTMLElement>("[data-glow]").forEach((el, i) => {
+      gsap.to(el, { opacity: i === shown ? 1 : 0, duration: reduced ? 0.2 : 1.4, ease: "power2.out", overwrite: true });
+    });
     const chars = titleRef.current?.querySelectorAll("[data-char]");
     if (chars?.length) {
       gsap.fromTo(
@@ -312,6 +345,7 @@ export function HomeExperience() {
     if (copy?.length) gsap.fromTo(copy, { opacity: 0, y: reduced ? 0 : 12 }, { opacity: 1, y: 0, duration: 0.8, ease: "expo.out", stagger: 0.05 });
   }, [shown]);
 
+  const onSceneReady = useCallback(() => setSceneReady(true), []);
   const f = FACULTIES[shown];
   const prev = FACULTIES[shown - 1];
   const next = FACULTIES[shown + 1];
@@ -326,11 +360,16 @@ export function HomeExperience() {
       data-lenis-prevent-wheel
     >
       {/* Atmosphere: matte black with a faculty-tinted glow that shifts between worlds */}
-      <div
-        ref={atmo}
-        className="absolute inset-0"
-        style={{ background: "radial-gradient(ellipse 70% 55% at 50% 42%, var(--glow, rgba(90,169,255,0.17)), transparent 70%), #07070a" } as React.CSSProperties}
-      />
+      <div ref={atmo} className="absolute inset-0 bg-ink">
+        {GLOW.map((g, i) => (
+          <div
+            key={i}
+            data-glow
+            className="absolute inset-0 will-change-[opacity]"
+            style={{ background: `radial-gradient(ellipse 70% 55% at 50% 42%, ${g}, transparent 70%)`, opacity: i === shown ? 1 : 0 }}
+          />
+        ))}
+      </div>
 
       {/* Monumental title, behind the sculpture */}
       <h1
@@ -361,13 +400,19 @@ export function HomeExperience() {
 
       {/* The 3D world */}
       <div className="absolute inset-0">
-        {webgl === false ? (
-          <FallbackVisual index={shown} />
-        ) : webgl ? (
+        {/* Static emblem shows immediately (also server-rendered) and fades out once the first 3D frame is drawn. */}
+        {(webgl !== true || !sceneReady) && (
+          <div className="absolute inset-0 transition-opacity duration-700" style={{ opacity: webgl && sceneReady ? 0 : 1 }}>
+            <FallbackVisual index={shown} />
+          </div>
+        )}
+        {webgl && (
           <SceneBoundary fallback={<FallbackVisual index={shown} />}>
-            <HomeCanvas rig={rig} onSelect={enter} active={visible} />
+            <div className="absolute inset-0 transition-opacity duration-700" style={{ opacity: sceneReady ? 1 : 0 }}>
+              <HomeCanvas rig={rig} onSelect={enter} active={visible && tabVisible} tier={tier} locked={locked} onReady={onSceneReady} />
+            </div>
           </SceneBoundary>
-        ) : null}
+        )}
       </div>
 
       {/* Vignette for legibility */}
@@ -382,7 +427,7 @@ export function HomeExperience() {
           aria-label={prev ? `Previous faculty: ${prev.name}` : "No previous faculty"}
           className="group pointer-events-auto absolute left-3 top-1/2 flex -translate-y-1/2 items-center gap-3 p-2 transition-opacity disabled:opacity-0 md:left-8"
         >
-          <span className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-ink/40 backdrop-blur transition group-hover:border-white/40">←</span>
+          <span className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-ink/60 transition group-hover:border-white/40">←</span>
           {prev && (
             <span className="hidden text-left lg:block">
               <span className="block text-[10px] tracking-widest2 text-bone-mute">{prev.index}</span>
@@ -402,7 +447,7 @@ export function HomeExperience() {
               <span className="block text-[11px] uppercase tracking-widest2 text-bone-dim transition group-hover:text-bone">{next.name}</span>
             </span>
           )}
-          <span className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-ink/40 backdrop-blur transition group-hover:border-white/40">→</span>
+          <span className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-ink/60 transition group-hover:border-white/40">→</span>
         </button>
 
         {/* BOTTOM: description · indicator · action */}
@@ -436,7 +481,7 @@ export function HomeExperience() {
           <div className="pointer-events-auto flex justify-center md:justify-end">
             <button
               onClick={() => enter(clamp(Math.round(rig.current.progress), 0, LAST))}
-              className="group relative overflow-hidden rounded-full border border-white/15 bg-white/[0.04] px-7 py-3.5 text-[12px] uppercase tracking-[0.24em] text-bone backdrop-blur-md transition hover:border-white/40"
+              className="group relative overflow-hidden rounded-full border border-white/15 bg-white/[0.05] px-7 py-3.5 text-[12px] uppercase tracking-[0.24em] text-bone transition hover:border-white/40"
               style={{ boxShadow: `0 0 50px -14px ${f.accent}, inset 0 1px 0 rgba(255,255,255,0.08)` }}
             >
               <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-700 group-hover:translate-x-full" aria-hidden />

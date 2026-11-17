@@ -47,7 +47,17 @@ The hero is one continuous 3D world with the three sculptures standing in a row 
 - **Transitions:** the outgoing piece rotates away and recedes, the camera travels sideways, the next piece swings in from depth, and the lighting, background glow and large title all change to the new faculty.
 - **Never trapped:** scrolling down on Law continues into the page; scrolling up on Engineering is left to the browser; below the hero the page scrolls normally.
 - **Enter a faculty:** click the centred sculpture or **Explore … →**. The camera flies in and the faculty page fades up. The back button returns you to the faculty you left.
-- **Accessibility and performance:** honours reduced-motion settings, falls back to a non-3D version when WebGL isn't available, stops rendering when the hero is off-screen, and lowers render resolution on slower GPUs.
+- **Accessibility and performance:** honours reduced-motion settings, falls back to a non-3D version when WebGL isn't available, stops rendering when the hero is off-screen or the tab is hidden, and lowers render resolution on slower GPUs.
+
+### Performance
+
+- **Rendering on demand.** The scene renders every frame only while something moves: travelling between faculties, dragging, the fly-in, mouse parallax and hover. When idle it renders every other display frame for the slow ambient motion.
+- **Adaptive quality.** Resolution starts at 1× and is capped at 1.5×. The app measures frame rate and steps resolution down (to 0.75×) or back up.
+- **Low-power tier.** Phones, weak CPUs, software renderers and older Intel HD/UHD graphics automatically get a lighter scene, as does any machine that can't keep up even at the lowest resolution. It drops the floor reflections, one light, the orbiting parts and floating shapes, and uses lower resolution, no antialiasing and fewer polygons.
+- **Fewer draw calls.** Static parts are merged and repeated moving parts are instanced, cutting draw calls from about 60 to about 25 per frame. The three per-sculpture lights are pooled into two.
+- **Lazy loading.** Three.js loads lazily; a static emblem shows until the first 3D frame is drawn. Lenis loads lazily and its loop only runs while scrolling. GSAP only loads on pages that use it.
+
+Add `?quality=high` or `?quality=low` to the homepage URL to force a tier (useful for testing).
 
 ### Booking rules
 
